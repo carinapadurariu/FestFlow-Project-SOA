@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # 1. MESSAGE BROKER (RabbitMQ)
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: festflow-rabbitmq
+    ports:
+      - "8672:5672"
+      - "18672:15672"
+    networks:
+      - festflow-network
+
+  # 2. EVENT STREAMING (Trecem pe Confluent - mult mai stabil pe Mac)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: festflow-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - festflow-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: festflow-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "8092:8092" # Portul extern pentru Inventory Service (Python local)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Configurare critica pentru acces din afara si din interior
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:8092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - festflow-network
+
+  # 3. DATABASE (Postgres)
+  db:
+    image: postgres:15
+    container_name: festflow-db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: festflow
+    ports:
+      - "8432:5432"
+    networks:
+      - festflow-network
+
+  # 4. LOAD BALANCER & GATEWAY (Nginx)
+  nginx:
+    image: nginx:latest
+    container_name: festflow-gateway
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - festflow-network
+
+networks:
+  festflow-network:
+    driver: bridge
