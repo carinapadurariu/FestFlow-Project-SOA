@@ -1,14 +1,6 @@
 FestFlow - Distributed Ticketing Platform
 
 
-DISTRIBUTION DIAGRAM
-![Arhitectura Sistemului](diagrama.png)
-
-
-
-
-
-
 The system is built as a distributed system composed of autonomous services running in Docker containers.
 Data Flow
 1.	Client (Frontend): The React application sends secured requests to the API.
