@@ -1,167 +1,78 @@
-# Implementing an Event-Driven Microservices Architecture with RabbitMQ and Kafka
-
-Technologies: Python (FastAPI), RabbitMQ, Kafka, Docker
+FestFlow - Distributed Ticketing Platform
 
 
-1. Introduction
-In modern e-commerce systems (such as our FestFlow ticketing platform), handling high volumes of concurrent traffic is a critical challenge. If a user buys a ticket and the system attempts to process the payment, update the inventory, and send a confirmation email in a single synchronous (blocking) request, the server will likely fail under pressure.
-
-The solution is an Event-Driven Architecture.
-
-This tutorial explains how we decoupled order processing using two communication models:
-
-Command Processing (RabbitMQ): To ingest orders quickly and guarantee their processing.
-
-Event Streaming (Kafka): To notify downstream systems (Email, Analytics) that a sale has occurred, without blocking the main flow.
-
----------------------------------------------------------------------------------------------
-
-2. System Architecture
-Our system acts as a distributed system composed of 3 autonomous microservices, each running in its own Docker container:
-
-Order Service (Producer): Receives the HTTP request from the client.
-
-Inventory Service (Consumer & Producer): Processes the order and updates stock.
-
-Email FaaS (Consumer): Reacts to events and sends notifications.
-
-Data Flow: HTTP Request -> Order Service -> [RabbitMQ Queue] -> Inventory Service -> [Kafka Topic] -> Email Service
-
-
----------------------------------------------------------------------------------------------
-
-
-3. Step 1: Decoupling the Order (RabbitMQ)
-The first step is ensuring the user receives an instant response ("Order Received"), even if the actual processing takes time. For this, we use a Message Broker (RabbitMQ).
-
-In the Order Service, we do not perform complex processing. We simply validate the data and push a JSON message into the orders queue.
-
-Implementation (Order Service - Python):
-
-Python
-
-import pika
-import json
-
-# RabbitMQ Connection Configuration
-connection = pika.BlockingConnection(
-    pika.ConnectionParameters(host='rabbitmq', port=5672)
-)
-channel = connection.channel()
-
-# Declare the queue to ensure it exists
-channel.queue_declare(queue='orders')
-
-def send_order_to_queue(order_data):
-    """
-    Sends the order to the queue for asynchronous processing.
-    The client does not wait for the processing to finish.
-    """
-    message = json.dumps(order_data)
-    
-    channel.basic_publish(
-        exchange='',
-        routing_key='orders',
-        body=message
-    )
-    print(f" [x] Order sent to RabbitMQ: {message}")
-    return True
-Benefit: If the Inventory Service is temporarily down or overloaded, messages are not lost. They remain in the RabbitMQ queue until they can be processed (Durability).
+DISTRIBUTION DIAGRAM
+![Uploading diagrama.png…]()
 
 
 
----------------------------------------------------------------------------------------------
-
-4. Step 2: Processing and Event Streaming (Kafka)
-The Inventory Service is the "worker". It listens to the RabbitMQ queue, checks the stock, and decides if the ticket can be sold.
-
-If the sale is successful, the Inventory Service becomes a Kafka Producer. It emits a TICKET_SOLD event. The major difference compared to RabbitMQ is that the message in Kafka can be consumed by multiple services that need it, not just one.
-
-Implementation (Inventory Service):
-
-Python
-
-from kafka import KafkaProducer
-import json
-
-# Kafka Producer Configuration
-producer = KafkaProducer(
-    bootstrap_servers=['kafka:9092'],
-    value_serializer=lambda x: json.dumps(x).encode('utf-8')
-)
-
-def process_order(ch, method, properties, body):
-    """
-    Callback triggered automatically when a message arrives in RabbitMQ
-    """
-    order = json.loads(body)
-    
-    # ... Stock verification logic ...
-    
-    if stock_available:
-        # Successful Sale -> Emit event to Kafka
-        event = {
-            "event_type": "TICKET_SOLD",
-            "ticket_id": order['ticket_type'],
-            "timestamp": time.time()
-        }
-        
-        # Send to 'analytics_topic'
-        producer.send('analytics_topic', value=event)
-        print(f" [Kafka] Event emitted: {event}")
-        
-    # Acknowledge processing to RabbitMQ
-    ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
----------------------------------------------------------------------------------------------
+
+The system is built as a distributed system composed of autonomous services running in Docker containers.
+Data Flow
+1.	Client (Frontend): The React application sends secured requests to the API.
+2.	API Gateway (Nginx): Acts as a Load Balancer and Reverse Proxy, routing traffic to backend services.
+3.	Order Service (REST API): Receives the order, validates the security token, and pushes the command asynchronously to RabbitMQ (Command Pattern).
+4.	Inventory Service (Worker): Consumes messages from RabbitMQ, processes stock updates, and emits domain events (TICKET_SOLD) to Kafka.
+5.	Email Service (FaaS): A stateless function that listens to Kafka events and triggers notifications.
 
 
-5. Step 3: Reacting to Events (FaaS / Email Service)
-The final component is a FaaS (Function as a Service) style microservice. It knows nothing about orders, stock, or payments. It knows only one thing: to listen to the Kafka topic and send an email when it sees a TICKET_SOLD event.
-
-This model allows for easy addition of new features (e.g., an Analytics Service) without modifying existing code in Inventory or Order services.
-
-Implementation (Email Service):
-
-Python
-
-from kafka import KafkaConsumer
-import json
-
-print(" [Email Service] Starting... Listening to 'analytics_topic'")
-
-# Kafka Consumer Configuration
-consumer = KafkaConsumer(
-    'analytics_topic',
-    bootstrap_servers=['kafka:9092'],
-    auto_offset_reset='latest', # Listen only to new messages
-    value_deserializer=lambda x: json.loads(x.decode('utf-8'))
-)
-
-# Main Event Loop
-for message in consumer:
-    event = message.value
-    
-    if event['event_type'] == 'TICKET_SOLD':
-        print(f" [Email] Generating PDF for ticket: {event['ticket_id']}")
-        # Simulate sending email
-        send_email_to_user(event)
+ Grading Requirements Met (Checklist)
+This project fulfills the criteria for the maximum grade (Grade S):
+•	Web Server & Secured REST API:
+o	Implemented in order-service using FastAPI.
+o	Security: Uses Bearer Token (JWT) to authenticate critical endpoints (Checkout).
+•	Scalability & Load Balancing:
+o	Uses Nginx as an API Gateway to distribute traffic and conceal the internal network topology.
+•	 Communication (Message Broker):
+o	Uses RabbitMQ to decouple the Order placement process from Stock processing (ensures Low Latency).
+•	 Event Streaming:
+o	Uses Apache Kafka to stream domain events (TICKET_SOLD) to other systems (e.g., Analytics, Email).
+•	 FaaS (Function as a Service):
+o	The email-service acts as a reactive FaaS, triggered exclusively by events.
+•	Web App & Server-Side Notifications:
+o	React application with Micro-frontend architecture.
+o	Real-time notifications via WebSockets (User receives confirmation without page refresh).
+•	Containers:
+o	The entire solution is containerized and orchestrated via Docker Compose.
 
 
----------------------------------------------------------------------------------------------
+Tech Stack
+•	Frontend: React.js, WebSockets
+•	Backend: Python 3.9 (FastAPI)
+•	Message Broker: RabbitMQ (AMQP)
+•	Event Streaming: Apache Kafka & Zookeeper
+•	Infrastructure: Docker, Docker Compose, Nginx
 
-6. Conclusion and Execution
-This architecture offers three major advantages for the FestFlow project:
 
-Scalability: We can process thousands of orders per second in the Order Service because RabbitMQ acts as a buffer.
 
-Resilience: If the email service fails, orders are still processed. Emails will be sent later when the service recovers and reads from Kafka (Replayability).
+ Installation & Running
+Prerequisites
+•	Docker Desktop installed and running.
+Step 1: Start the System
+Run the following command in the project root to build and start all containers:
 
-Decoupling: Services do not directly depend on each other.
+Step 2: Access
+•	Web App: http://localhost:3000
+•	RabbitMQ Dashboard: http://localhost:15672 (User: guest, Pass: guest)
+•	API Docs: http://localhost:8000/docs
 
-How to run the project: To start the entire infrastructure (including Zookeeper for Kafka), we use Docker Compose:
+ Demo Scenarios (Testing Guide)
+The system implements Role-Based Access Control (RBAC). You can test two different flows:
+ 1. ADMINISTRATOR Role
+•	Login: User: admin / Password: admin123
+•	Capabilities:
+1.	Access ADMIN DASHBOARD (top right).
+2.	View the Sales Area Chart and Real-time System Logs.
+3.	Go to the TICKETS page.
+4.	Observe the STOCK counter on each ticket.
+5.	Modify price or stock manually and click SAVE CHANGES.
+ 2. CLIENT (User) Role
+•	Login: User: guest / Password: festflow
+•	Capabilities:
+1.	View tickets with prices set by the Admin.
+2.	Add tickets to the Cart.
+3.	Click CHECKOUT.
+4.	Observe the Real-time Notification (bell icon) confirming asynchronous processing.
 
-Bash
-
-docker-compose up -d --build
