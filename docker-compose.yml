@@ -1,7 +1,8 @@
 version: '3.8'
 
 services:
-  # 1. MESSAGE BROKER (RabbitMQ)
+  # --- 1. INFRASTRUCTURA (Porturile tale CUSTOM) ---
+
   rabbitmq:
     image: rabbitmq:3-management
     container_name: festflow-rabbitmq
@@ -11,7 +12,6 @@ services:
     networks:
       - festflow-network
 
-  # 2. EVENT STREAMING (Trecem pe Confluent - mult mai stabil pe Mac)
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: festflow-zookeeper
@@ -29,11 +29,11 @@ services:
     depends_on:
       - zookeeper
     ports:
-      - "8092:8092" # Portul extern pentru Inventory Service (Python local)
+      - "8092:8092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Configurare critica pentru acces din afara si din interior
+      # Conexiuni: Extern pe 8092, Intern pe 29092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:8092,PLAINTEXT_INTERNAL://kafka:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
@@ -41,7 +41,6 @@ services:
     networks:
       - festflow-network
 
-  # 3. DATABASE (Postgres)
   db:
     image: postgres:15
     container_name: festflow-db
@@ -54,7 +53,51 @@ services:
     networks:
       - festflow-network
 
-  # 4. LOAD BALANCER & GATEWAY (Nginx)
+  # --- 2. SERVICIILE TALE PYTHON ---
+
+  order-service:
+    build: ./order-service
+    container_name: order-service
+    restart: always  # <--- FORTEAZA REPORNIREA DACA CRAPA
+    ports:
+      - "8000:8000"
+    depends_on:
+      - rabbitmq
+      - db
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - DATABASE_URL=postgresql://user:password@db:5432/festflow
+    networks:
+      - festflow-network
+
+  inventory-service:
+    build: ./inventory-service
+    container_name: inventory-service
+    restart: always  # <--- ESENTIAL: Daca nu se conecteaza la Kafka, incearca iar, nu dispare
+    depends_on:
+      - rabbitmq
+      - kafka
+      - db
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092 # Portul intern corect
+      - DATABASE_URL=postgresql://user:password@db:5432/festflow
+    networks:
+      - festflow-network
+
+  email-service:
+    build: ./email-service
+    container_name: email-service
+    restart: always
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    networks:
+      - festflow-network
+
+  # --- 3. GATEWAY ---
+
   nginx:
     image: nginx:latest
     container_name: festflow-gateway
@@ -62,11 +105,12 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "8080:80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - order-service
     networks:
       - festflow-network
 
+# --- 4. RETEAUA COMUNA ---
 networks:
   festflow-network:
     driver: bridge
