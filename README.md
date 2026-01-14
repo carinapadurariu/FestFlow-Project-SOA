@@ -2,7 +2,7 @@ FestFlow - Distributed Ticketing Platform
 
 
 DISTRIBUTION DIAGRAM
-![Uploading diagrama.png…]()
+![Arhitectura Sistemului](diagrama.png)
 
 
 
